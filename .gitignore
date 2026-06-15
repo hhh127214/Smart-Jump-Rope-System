@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.tools/
+__pycache__/
+*.pyc
+rope.db
+.git_ssh_known_hosts
+.DS_Store
