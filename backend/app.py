@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.db import db_init
 from backend.routers.screen import router as screen_router
+from backend.routers.admin import router as admin_router
 from backend.services.flow import ensure_worker_started, flow_reset
 
 app = FastAPI(title='Jump Rope System API', version='1.0.0')
@@ -24,3 +25,4 @@ def on_startup() -> None:
 
 
 app.include_router(screen_router)
+app.include_router(admin_router)
