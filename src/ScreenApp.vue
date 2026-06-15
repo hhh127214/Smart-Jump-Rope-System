@@ -434,7 +434,7 @@ export default {
       }
 
       if (this.flow.phase === "idle") {
-        this.ensureActionTimer("recognition", 900, async () => {
+        this.ensureActionTimer("recognition", 5000, async () => {
           await this.startRecognition();
         });
         return;
@@ -445,7 +445,7 @@ export default {
         const next = this.flow.slots.find((item) => item.user && !item.confirmedInfo);
         if (next) {
           this.ui.message = `站位 ${next.slot} 身份识别完成，自动确认中`;
-          this.ensureActionTimer(`confirm_${next.slot}`, 520, async () => {
+          this.ensureActionTimer(`confirm_${next.slot}`, 1500, async () => {
             await this.confirmInfo(next.slot);
           });
         } else {
@@ -459,7 +459,7 @@ export default {
         const slot = Number(this.flow.promptSlot || 0);
         if (slot > 0) {
           this.ui.message = `请站位 ${slot} 完成指定动作`;
-          this.ensureActionTimer(`gesture_${slot}`, 900, async () => {
+          this.ensureActionTimer(`gesture_${slot}`, 2000, async () => {
             await this.confirmGesture(slot);
           });
         }

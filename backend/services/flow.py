@@ -38,6 +38,7 @@ def flow_reset() -> dict[str, Any]:
         'cadences_ms': [470, 390, 520, 430, 610],
         '_last_inc_ms': [0, 0, 0, 0, 0],
         '_persisted_run_id': '',
+        '_pending_students': [],
     }
     return FLOW_STATE
 
@@ -248,10 +249,12 @@ def start_recognition() -> dict[str, Any]:
         FLOW_STATE['_last_inc_ms'] = [0, 0, 0, 0, 0]
         FLOW_STATE['_persisted_run_id'] = ''
         slots = empty_slots()
-        for i in range(5):
-            slots[i]['user'] = students[i] if i < len(students) else None
+        # 逐个识别：只分配第1个站位的学生，其余排队等待
+        if len(students) > 0:
+            slots[0]['user'] = students[0]
         FLOW_STATE['slots'] = slots
-    log_flow('', str(FLOW_STATE.get('venue_id') or ''), 'confirming_info', 'recognition_start', '开始自动识别五个站位')
+        FLOW_STATE['_pending_students'] = students[1:]
+    log_flow('', str(FLOW_STATE.get('venue_id') or ''), 'confirming_info', 'recognition_start', '开始逐个识别站位')
     return {'ok': True, 'slots': json.loads(json.dumps(FLOW_STATE['slots']))}
 
 
@@ -262,9 +265,17 @@ def confirm_info(slot: int, confirmed: bool) -> dict[str, Any]:
         if FLOW_STATE.get('phase') != 'confirming_info':
             raise HTTPException(status_code=409, detail='NOT_IN_CONFIRMING')
         FLOW_STATE['slots'][slot - 1]['confirmedInfo'] = bool(confirmed)
+        # 当前站位确认后，分配下一个站位的学生（逐个识别）
+        pending = FLOW_STATE.get('_pending_students', [])
+        if pending:
+            next_slot_idx = slot  # 0-based: slot 1→index 0, next is slot 2→index 1
+            if next_slot_idx < 5:
+                FLOW_STATE['slots'][next_slot_idx]['user'] = pending[0]
+                FLOW_STATE['_pending_students'] = pending[1:]
         if all(item.get('confirmedInfo') for item in FLOW_STATE['slots']):
             FLOW_STATE['phase'] = 'binding'
             FLOW_STATE['prompt_slot'] = 1
+            FLOW_STATE['_pending_students'] = []
     log_flow('', str(FLOW_STATE.get('venue_id') or ''), str(FLOW_STATE.get('phase') or ''), 'confirm_info', f'站位 {slot} 身份确认完成')
     return {'ok': True, 'state': public_state()}
 
