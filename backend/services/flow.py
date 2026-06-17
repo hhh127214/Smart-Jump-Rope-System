@@ -7,10 +7,10 @@ from typing import Any
 from fastapi import HTTPException
 
 from backend.db import db_connect, log_flow, now_ms
+from backend.services.camera_bridge import detect_faces, track_slot_status, count_jump_events, get_camera_config, CAMERA_CONFIG
 
 FLOW_LOCK = threading.Lock()
 FLOW_STATE: dict[str, Any] = {}
-CAMERA_CONFIG = {'mode': 'SIM', 'index': 0}
 WORKER_STARTED = False
 
 
@@ -38,7 +38,6 @@ def flow_reset() -> dict[str, Any]:
         'cadences_ms': [470, 390, 520, 430, 610],
         '_last_inc_ms': [0, 0, 0, 0, 0],
         '_persisted_run_id': '',
-        '_pending_students': [],
     }
     return FLOW_STATE
 
@@ -62,17 +61,7 @@ def public_state(ts_ms: int | None = None) -> dict[str, Any]:
     ranking = [{'slot': i + 1, 'count': counts[i]} for i in range(5)]
     ranking.sort(key=lambda item: (-item['count'], item['slot']))
 
-    slot_status = ['OK'] * 5
-    if phase == 'running':
-        sec = int(t / 1000)
-        for i in range(5):
-            marker = (sec + i * 3) % 20
-            if 6 <= marker <= 7:
-                slot_status[i] = 'OUT_OF_ROI'
-            elif 10 <= marker <= 11:
-                slot_status[i] = 'OCCLUDED'
-            elif 15 <= marker <= 16:
-                slot_status[i] = 'TRACK_LOST'
+    slot_status = track_slot_status()
 
     return {
         'phase': phase,
@@ -189,20 +178,16 @@ def flow_worker() -> None:
             if started_at_ms <= 0:
                 continue
 
-            last_inc = FLOW_STATE.get('_last_inc_ms') or [0, 0, 0, 0, 0]
-            cadences = FLOW_STATE.get('cadences_ms') or [470, 390, 520, 430, 610]
+            increments = count_jump_events()
             counts = FLOW_STATE.get('counts') or [0, 0, 0, 0, 0]
             points = FLOW_STATE.get('points') or [[], [], [], [], []]
 
             for i in range(5):
-                if last_inc[i] <= 0:
-                    last_inc[i] = started_at_ms
-                while t - last_inc[i] >= int(cadences[i]):
-                    last_inc[i] += int(cadences[i])
-                    counts[i] = int(counts[i]) + 1
-                    points[i].append({'t': int(last_inc[i] - started_at_ms), 'c': int(counts[i])})
+                inc = increments[i] if i < len(increments) else 0
+                if inc > 0:
+                    counts[i] = int(counts[i]) + inc
+                    points[i].append({'t': int(t - started_at_ms), 'c': int(counts[i])})
 
-            FLOW_STATE['_last_inc_ms'] = last_inc
             FLOW_STATE['counts'] = counts
             FLOW_STATE['points'] = points
 
@@ -227,10 +212,6 @@ def ensure_worker_started() -> None:
     WORKER_STARTED = True
 
 
-def get_camera_config() -> dict[str, Any]:
-    return dict(CAMERA_CONFIG)
-
-
 def set_camera_config(mode: str, index: int) -> dict[str, Any]:
     CAMERA_CONFIG['mode'] = mode if mode in {'SIM', 'USB'} else 'SIM'
     CAMERA_CONFIG['index'] = int(index)
@@ -238,7 +219,7 @@ def set_camera_config(mode: str, index: int) -> dict[str, Any]:
 
 
 def start_recognition() -> dict[str, Any]:
-    students = db_fetch_students(5)
+    faces = detect_faces()
     with FLOW_LOCK:
         FLOW_STATE['phase'] = 'confirming_info'
         FLOW_STATE['prompt_slot'] = 0
@@ -249,12 +230,17 @@ def start_recognition() -> dict[str, Any]:
         FLOW_STATE['_last_inc_ms'] = [0, 0, 0, 0, 0]
         FLOW_STATE['_persisted_run_id'] = ''
         slots = empty_slots()
-        # 逐个识别：只分配第1个站位的学生，其余排队等待
-        if len(students) > 0:
-            slots[0]['user'] = students[0]
+        # 镜头拍到谁就给谁分配，不区分站位顺序
+        for face in faces:
+            idx = face['slot'] - 1
+            if idx < 5:
+                slots[idx]['user'] = {
+                    'id': face.get('id', ''),
+                    'name': face.get('name', ''),
+                    'studentId': face.get('student_id', ''),
+                }
         FLOW_STATE['slots'] = slots
-        FLOW_STATE['_pending_students'] = students[1:]
-    log_flow('', str(FLOW_STATE.get('venue_id') or ''), 'confirming_info', 'recognition_start', '开始逐个识别站位')
+    log_flow('', str(FLOW_STATE.get('venue_id') or ''), 'confirming_info', 'recognition_start', '开始自动识别五个站位')
     return {'ok': True, 'slots': json.loads(json.dumps(FLOW_STATE['slots']))}
 
 
@@ -265,17 +251,9 @@ def confirm_info(slot: int, confirmed: bool) -> dict[str, Any]:
         if FLOW_STATE.get('phase') != 'confirming_info':
             raise HTTPException(status_code=409, detail='NOT_IN_CONFIRMING')
         FLOW_STATE['slots'][slot - 1]['confirmedInfo'] = bool(confirmed)
-        # 当前站位确认后，分配下一个站位的学生（逐个识别）
-        pending = FLOW_STATE.get('_pending_students', [])
-        if pending:
-            next_slot_idx = slot  # 0-based: slot 1→index 0, next is slot 2→index 1
-            if next_slot_idx < 5:
-                FLOW_STATE['slots'][next_slot_idx]['user'] = pending[0]
-                FLOW_STATE['_pending_students'] = pending[1:]
         if all(item.get('confirmedInfo') for item in FLOW_STATE['slots']):
             FLOW_STATE['phase'] = 'binding'
             FLOW_STATE['prompt_slot'] = 1
-            FLOW_STATE['_pending_students'] = []
     log_flow('', str(FLOW_STATE.get('venue_id') or ''), str(FLOW_STATE.get('phase') or ''), 'confirm_info', f'站位 {slot} 身份确认完成')
     return {'ok': True, 'state': public_state()}
 
@@ -284,14 +262,9 @@ def confirm_gesture(slot: int) -> dict[str, Any]:
     with FLOW_LOCK:
         if FLOW_STATE.get('phase') != 'binding':
             raise HTTPException(status_code=409, detail={'error': 'NOT_BINDING', 'promptSlot': int(FLOW_STATE.get('prompt_slot') or 0)})
-        prompt = int(FLOW_STATE.get('prompt_slot') or 0)
-        if slot != prompt:
-            raise HTTPException(status_code=409, detail={'error': 'NOT_PROMPTED', 'promptSlot': prompt})
+        # 任意站位可以独立绑定，不按顺序
         FLOW_STATE['slots'][slot - 1]['confirmedPosition'] = True
-        nxt = prompt + 1
-        if nxt <= 5:
-            FLOW_STATE['prompt_slot'] = nxt
-        else:
+        if all(item.get('confirmedPosition') for item in FLOW_STATE['slots']):
             FLOW_STATE['prompt_slot'] = 0
             FLOW_STATE['phase'] = 'ready'
     log_flow('', str(FLOW_STATE.get('venue_id') or ''), str(FLOW_STATE.get('phase') or ''), 'binding', f'站位 {slot} 完成动作绑定')

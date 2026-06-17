@@ -74,3 +74,19 @@ def test_metrics() -> dict:
 def camera_frame(ts: int | None = None, t: int | None = None) -> Response:
     current = ts or t or now_ms()
     return Response(content=svg_frame(int(current)), media_type='image/svg+xml; charset=utf-8')
+
+
+# === 后期摄像头算法接入预留端点 ===
+
+@router.post('/camera/faces')
+def push_faces(payload: dict = Body(default_factory=dict)) -> dict:
+    """摄像头人脸识别回调（后期接入真实 SDK 时使用）"""
+    faces = payload.get('faces', [])
+    return {'ok': True, 'received': len(faces)}
+
+
+@router.post('/camera/counts')
+def push_counts(payload: dict = Body(default_factory=dict)) -> dict:
+    """跳绳计数回调（后期接入姿态检测算法时使用）"""
+    counts = payload.get('counts', [])
+    return {'ok': True, 'received': len(counts)}

@@ -127,77 +127,11 @@ export default {
       if (this.ui.countdownValue > 0) return "countdown";
       return this.flow.phase || "idle";
     },
-    phaseTitle() {
-      const map = {
-        idle: "等待入场",
-        confirming_info: "人脸识别中",
-        binding: "站位绑定中",
-        ready: "准备开始",
-        countdown: "5 秒倒计时",
-        running: "正在计数",
-        result: "成绩展示",
-      };
-      return map[this.displayPhase] || "自动测试中";
-    },
-    phaseSubtitle() {
-      if (this.displayPhase === "idle") return "摄像头接入后自动进入识别流程";
-      if (this.displayPhase === "confirming_info") return `已识别 ${this.recognizedCount}/5 个站位`;
-      if (this.displayPhase === "binding") return `请站位 ${this.flow.promptSlot || "-"} 完成指定动作`;
-      if (this.displayPhase === "ready") return "五个站位绑定完成，准备统一起跳";
-      if (this.displayPhase === "countdown") return "请全体同学做好准备";
-      if (this.displayPhase === "running") return "系统正在实时统计五个站位的跳绳次数";
-      if (this.displayPhase === "result") return "本轮测试已结束，成绩自动保存";
-      return "系统正在工作中";
-    },
-    heroPrompt() {
-      if (this.ui.countdownValue > 0) return "准备起跳";
-      if (this.flow.phase === "idle") return "摄像头已接入";
-      if (this.flow.phase === "confirming_info") return "人脸识别中";
-      if (this.flow.phase === "binding") return `绑定站位 ${this.flow.promptSlot || ""}`.trim();
-      if (this.flow.phase === "ready") return "全部就绪";
-      if (this.flow.phase === "running") return fmtMMSS(this.runningElapsedSec);
-      if (this.flow.phase === "result") return "成绩已保存";
-      return "跳绳测试";
-    },
-    heroTag() {
-      if (this.flow.phase === "running") return "正计时";
-      return "自动流程";
-    },
-    heroDesc() {
-      if (this.flow.phase === "running") return "五个站位实时计数中";
-      return this.ui.message;
-    },
-    runningElapsedSec() {
-      if (this.flow.phase !== "running") return 0;
-      const duration = Number(this.flow.durationSec || 0);
-      const remaining = Number(this.flow.remainingSec || 0);
-      return Math.max(0, duration - remaining);
-    },
-    stageSteps() {
-      const active = {
-        idle: 0,
-        confirming_info: 1,
-        binding: 2,
-        ready: 3,
-        countdown: 3,
-        running: 4,
-        result: 5,
-      }[this.displayPhase] || 0;
-      return [
-        { key: "cam", label: "摄像头" },
-        { key: "face", label: "识别" },
-        { key: "bind", label: "绑定" },
-        { key: "ready", label: "倒计时" },
-        { key: "run", label: "计数" },
-        { key: "done", label: "结果" },
-      ].map((item, index) => ({
-        ...item,
-        done: active > index,
-        active: active === index,
-      }));
-    },
     recognizedCount() {
       return this.stations.filter((item) => item.hasUser).length;
+    },
+    boundCount() {
+      return (this.flow.slots || []).filter((s) => s.confirmedPosition).length;
     },
     topRankingText() {
       if (!this.flow.ranking.length) return "等待测试开始";
@@ -207,7 +141,7 @@ export default {
         .join(" / ");
     },
     showBindingOverlay() {
-      return this.flow.phase === "binding" && Number(this.flow.promptSlot || 0) > 0;
+      return this.flow.phase === "binding";
     },
     showCountdownOverlay() {
       return Number(this.ui.countdownValue || 0) > 0;
@@ -249,38 +183,37 @@ export default {
       const ss = String(now.getSeconds()).padStart(2, "0");
       this.ui.nowText = `${hh}:${mm}:${ss}`;
     },
-    stationStatus(slotNo, raw, tracking) {
+    stationStatus(_slotNo, raw, tracking) {
       if (this.flow.phase === "idle") {
-        return { label: "等待入位", className: "is-idle" };
+        return { label: "准备中", className: "is-idle" };
       }
       if (!raw.user) {
-        return { label: "等待识别", className: "is-empty" };
+        return { label: "等待入位", className: "is-idle" };
       }
       if (tracking === "OUT_OF_ROI") {
-        return { label: "请回到站位", className: "is-alert" };
+        return { label: "请就位哦", className: "is-alert" };
       }
       if (tracking === "OCCLUDED") {
-        return { label: "识别遮挡", className: "is-alert" };
+        return { label: "有点挡到了", className: "is-alert" };
       }
       if (tracking === "TRACK_LOST") {
-        return { label: "重新跟踪中", className: "is-alert" };
+        return { label: "正在找你", className: "is-alert" };
       }
       if (this.flow.phase === "confirming_info") {
-        return { label: raw.confirmedInfo ? "身份完成" : "识别成功", className: "is-recognized" };
+        return { label: raw.confirmedInfo ? "认出你啦" : "识别中...", className: raw.confirmedInfo ? "is-bound" : "is-binding" };
       }
       if (this.flow.phase === "binding") {
-        if (this.flow.promptSlot === slotNo) return { label: "请做动作", className: "is-binding" };
         if (raw.confirmedPosition) return { label: "绑定完成", className: "is-bound" };
-        return { label: "等待绑定", className: "is-waiting" };
+        return { label: "做动作中", className: "is-binding" };
       }
       if (this.flow.phase === "ready" || this.ui.countdownValue > 0) {
-        return { label: "准备开始", className: "is-ready" };
+        return { label: "准备起跳", className: "is-ready" };
       }
       if (this.flow.phase === "running") {
-        return { label: "正在计数", className: "is-running" };
+        return { label: "计数中", className: "is-running" };
       }
       if (this.flow.phase === "result") {
-        return { label: "最终成绩", className: "is-result" };
+        return { label: "本轮完成", className: "is-result" };
       }
       return { label: "已就绪", className: "is-ready" };
     },
@@ -442,27 +375,29 @@ export default {
       this.clearActionTimer("recognition");
 
       if (this.flow.phase === "confirming_info") {
-        const next = this.flow.slots.find((item) => item.user && !item.confirmedInfo);
-        if (next) {
-          this.ui.message = `站位 ${next.slot} 身份识别完成，自动确认中`;
-          this.ensureActionTimer(`confirm_${next.slot}`, 1500, async () => {
-            await this.confirmInfo(next.slot);
+        const unconfirmed = this.flow.slots.filter((item) => item.user && !item.confirmedInfo);
+        if (unconfirmed.length) {
+          this.ui.message = `人脸识别中 ${this.recognizedCount}/5`;
+          unconfirmed.forEach((item) => {
+            this.ensureActionTimer(`confirm_${item.slot}`, 1500, async () => {
+              await this.confirmInfo(item.slot);
+            });
           });
         } else {
-          this.ui.message = "五个站位识别完成，正在进入绑定环节";
+          this.ui.message = "全部站位识别完成，进入绑定";
         }
         return;
       }
       this.stations.forEach((station) => this.clearActionTimer(`confirm_${station.slot}`));
 
       if (this.flow.phase === "binding") {
-        const slot = Number(this.flow.promptSlot || 0);
-        if (slot > 0) {
-          this.ui.message = `请站位 ${slot} 完成指定动作`;
-          this.ensureActionTimer(`gesture_${slot}`, 2000, async () => {
-            await this.confirmGesture(slot);
+        this.ui.message = "请所有同学举起右手完成手势绑定";
+        const unbound = this.flow.slots.filter((item) => item.user && !item.confirmedPosition);
+        unbound.forEach((item) => {
+          this.ensureActionTimer(`gesture_${item.slot}`, 2000, async () => {
+            await this.confirmGesture(item.slot);
           });
-        }
+        });
         return;
       }
       this.stations.forEach((station) => this.clearActionTimer(`gesture_${station.slot}`));
@@ -505,56 +440,18 @@ export default {
 </script>
 
 <template>
-  <div class="screen-root">
+  <div class="screen-root" :class="'phase-' + flow.phase">
     <div class="ambient ambient-a"></div>
     <div class="ambient ambient-b"></div>
     <div class="ambient ambient-c"></div>
 
     <div class="screen-shell">
-      <header class="screen-top">
-        <div class="brand-block">
-          <div class="brand-eyebrow">智慧体育考试大屏</div>
-          <div class="brand-title-row">
-            <h1 class="brand-title-cn">五人跳绳自动测试</h1>
-            <div class="brand-title-en">跳绳测试大屏</div>
-          </div>
-        </div>
-
-        <div class="top-status">
-          <div class="status-chip success">
-            <span class="chip-dot"></span>
-            <span>摄像头 {{ camera.connected ? "已连接" : "连接中" }}</span>
-          </div>
-          <div class="status-chip light">模式 {{ camera.mode === "SIM" ? "模拟" : camera.mode }}</div>
-          <div class="status-chip light">时间 {{ ui.nowText }}</div>
-        </div>
-      </header>
-
-      <section class="hero-board">
-        <div class="hero-decor hero-decor-left"></div>
-        <div class="hero-decor hero-decor-right"></div>
-        <div class="hero-copy">
-          <div class="hero-kicker">{{ phaseTitle }}</div>
-          <div class="hero-sub">{{ phaseSubtitle }}</div>
-        </div>
-
-        <div class="hero-core" :class="{ 'hero-core-running': flow.phase === 'running' }">
-          <div class="core-glow" :class="{ 'core-glow-running': flow.phase === 'running' }"></div>
-          <div class="core-pill" :class="{ 'core-pill-running': flow.phase === 'running' }">
-            <div class="core-small">{{ heroTag }}</div>
-            <div class="core-main">{{ heroPrompt }}</div>
-            <div v-if="flow.phase !== 'running'" class="core-desc">{{ heroDesc }}</div>
-          </div>
-        </div>
-
-      </section>
-
       <section class="station-grid" :class="'phase-' + displayPhase">
         <article
           v-for="station in stations"
           :key="station.slot"
           class="station-card"
-          :class="[station.statusClass, { highlighted: flow.promptSlot === station.slot && flow.phase === 'binding' }]"
+          :class="[station.statusClass]"
           :style="cardStyle(station.colors)"
         >
           <div class="station-bg-lines"></div>
@@ -587,28 +484,8 @@ export default {
     <div v-if="showBindingOverlay || showCountdownOverlay" class="center-stage-overlay">
       <div v-if="showBindingOverlay" class="binding-stage-card">
         <div class="overlay-tag">站位绑定</div>
-        <div class="binding-stage-slot">
-          <span class="binding-stage-slot-label">站位</span>
-          <span class="binding-stage-slot-number">{{ String(flow.promptSlot).padStart(2, "0") }}</span>
-        </div>
-        <div class="binding-stage-gesture">
-          <span class="gesture-ring ring-one"></span>
-          <span class="gesture-ring ring-two"></span>
-          <div class="gesture-hand-icon" aria-hidden="true">
-            <span class="gesture-hand-glow"></span>
-            <span class="gesture-hand-mark mark-a"></span>
-            <span class="gesture-hand-mark mark-b"></span>
-            <span class="gesture-hand-mark mark-c"></span>
-            <span class="gesture-hand-palm"></span>
-            <span class="gesture-hand-thumb"></span>
-            <span class="gesture-hand-finger finger-1"></span>
-            <span class="gesture-hand-finger finger-2"></span>
-            <span class="gesture-hand-finger finger-3"></span>
-            <span class="gesture-hand-finger finger-4"></span>
-          </div>
-          <span class="gesture-hint">右手挥动</span>
-        </div>
-        <div class="overlay-text">请站位 {{ flow.promptSlot }} 同学将右手举过头顶并左右挥动完成绑定</div>
+        <div class="binding-stage-number">{{ boundCount }}/5 已完成</div>
+        <div class="overlay-text">请所有同学举起右手完成手势绑定</div>
       </div>
 
       <div v-else class="countdown-stage-card">
